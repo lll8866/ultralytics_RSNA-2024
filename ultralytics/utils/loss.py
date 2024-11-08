@@ -31,8 +31,8 @@ class VarifocalLoss(nn.Module):
         with autocast(enabled=False):
             loss = (
                 (F.binary_cross_entropy_with_logits(pred_score.float(), gt_score.float(), reduction="none") * weight)
-                .mean(1)
-                .sum()
+                    .mean(1)
+                    .sum()
             )
         return loss
 
@@ -83,8 +83,8 @@ class DFLoss(nn.Module):
         wl = tr - target  # weight left
         wr = 1 - wl  # weight right
         return (
-            F.cross_entropy(pred_dist, tl.view(-1), reduction="none").view(tl.shape) * wl
-            + F.cross_entropy(pred_dist, tr.view(-1), reduction="none").view(tl.shape) * wr
+                F.cross_entropy(pred_dist, tl.view(-1), reduction="none").view(tl.shape) * wl
+                + F.cross_entropy(pred_dist, tr.view(-1), reduction="none").view(tl.shape) * wr
         ).mean(-1, keepdim=True)
 
 
@@ -225,12 +225,10 @@ class v8DetectionLoss:
         targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
         gt_labels, gt_bboxes = targets.split((1, 4), 2)  # cls, xyxy
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
-
         # Pboxes
         pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
         # dfl_conf = pred_distri.view(batch_size, -1, 4, self.reg_max).detach().softmax(-1)
         # dfl_conf = (dfl_conf.amax(-1).mean(-1) + dfl_conf.amax(-1).amin(-1)) / 2
-
         _, target_bboxes, target_scores, fg_mask, _ = self.assigner(
             # pred_scores.detach().sigmoid() * 0.8 + dfl_conf.unsqueeze(-1) * 0.2,
             pred_scores.detach().sigmoid(),
@@ -245,7 +243,60 @@ class v8DetectionLoss:
 
         # Cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
-        loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+        # loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+
+        # plan1
+        #         total_loss_cls = torch.zeros(pred_scores.shape[2]).to('cuda')
+        #         weight_temp = []
+        #         for i in range(int(pred_scores.shape[2]/3)):
+        #             weight_temp.extend([1.0, 2.0, 4.0])
+        #         weights = torch.tensor(weight_temp)
+        #         cross_entropy_loss_function = nn.CrossEntropyLoss(weight=weights.to('cuda'),reduction='none')
+        #         # 创建一个掩码，用于标记目标张量中类别维度全为0的位置
+        #         mask_zero = torch.all(target_scores == 0, dim=-1)
+
+        #         # 将掩码扩展到与pred_scores和target_scores相同的维度，以便进行后续操作
+        #         mask_zero_expanded = mask_zero.unsqueeze(-1).expand_as(pred_scores)
+
+        #         # 根据掩码分离出需要使用BCELoss和CrossEntropyLoss的部分
+        #         pred_scores_bce = pred_scores*mask_zero_expanded
+        #         target_scores_bce = target_scores*mask_zero_expanded.to(dtype)
+
+        #         pred_scores_ce = pred_scores*(~mask_zero_expanded)
+        #         target_scores_ce = target_scores*(~mask_zero_expanded).to(dtype)
+
+        #         # 分别计算两种损失
+        #         loss_bce = self.bce(pred_scores_bce, target_scores_bce)
+        #         loss_ce = cross_entropy_loss_function(pred_scores_ce.view(-1,pred_scores.shape[2]), target_scores_ce.view(-1,pred_scores.shape[2]))
+
+        #         # 计算总损失
+        #         total_loss_cls = loss_bce.sum() + loss_ce.sum()
+        #         loss[1] = total_loss_cls / target_scores_sum
+
+        # plan2
+
+        # 创建一个掩码，用于标记目标张量中类别维度全为0的位置
+        mask_zero = torch.all(target_scores == 0, dim=-1)
+
+        # 将掩码扩展到与pred_scores和target_scores相同的维度，以便进行后续操作
+        mask_zero_expanded = mask_zero.unsqueeze(-1).expand_as(pred_scores)
+
+        weight_temp = []
+        for i in range(int(pred_scores.shape[2] / 3)):
+            weight_temp.extend([1.0, 1.25, 2.5])
+        weights = torch.tensor(weight_temp)
+        # 创建形状为 (1, len(weights)) 的基础张量
+        base_tensor = torch.tensor(weights).unsqueeze(0)
+
+        # 通过tile函数在0维度上重复，得到形状为 (pred_scores.shape[0] * pred_scores.shape[1], len(weights)) 的张量
+        repeated_tensor = base_tensor.tile((pred_scores.shape[0] * pred_scores.shape[1], 1))
+
+        # 调整形状为 (pred_scores.shape[0], pred_scores.shape[1], len(weights))
+        weights = repeated_tensor.view(pred_scores.shape[0], pred_scores.shape[1], len(weights))
+        weights[mask_zero_expanded] = 1.0
+        bce_loss_func = nn.BCEWithLogitsLoss(weight=weights.to('cuda'), reduction='none')
+
+        loss[1] = bce_loss_func(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum
 
         # Bbox loss
         if fg_mask.sum():
@@ -354,7 +405,7 @@ class v8SegmentationLoss(v8DetectionLoss):
 
     @staticmethod
     def single_mask_loss(
-        gt_mask: torch.Tensor, pred: torch.Tensor, proto: torch.Tensor, xyxy: torch.Tensor, area: torch.Tensor
+            gt_mask: torch.Tensor, pred: torch.Tensor, proto: torch.Tensor, xyxy: torch.Tensor, area: torch.Tensor
     ) -> torch.Tensor:
         """
         Compute the instance segmentation loss for a single image.
@@ -378,16 +429,16 @@ class v8SegmentationLoss(v8DetectionLoss):
         return (crop_mask(loss, xyxy).mean(dim=(1, 2)) / area).sum()
 
     def calculate_segmentation_loss(
-        self,
-        fg_mask: torch.Tensor,
-        masks: torch.Tensor,
-        target_gt_idx: torch.Tensor,
-        target_bboxes: torch.Tensor,
-        batch_idx: torch.Tensor,
-        proto: torch.Tensor,
-        pred_masks: torch.Tensor,
-        imgsz: torch.Tensor,
-        overlap: bool,
+            self,
+            fg_mask: torch.Tensor,
+            masks: torch.Tensor,
+            target_gt_idx: torch.Tensor,
+            target_bboxes: torch.Tensor,
+            batch_idx: torch.Tensor,
+            proto: torch.Tensor,
+            pred_masks: torch.Tensor,
+            imgsz: torch.Tensor,
+            overlap: bool,
     ) -> torch.Tensor:
         """
         Calculate the loss for instance segmentation.
@@ -533,7 +584,7 @@ class v8PoseLoss(v8DetectionLoss):
         return y
 
     def calculate_keypoints_loss(
-        self, masks, target_gt_idx, keypoints, batch_idx, stride_tensor, target_bboxes, pred_kpts
+            self, masks, target_gt_idx, keypoints, batch_idx, stride_tensor, target_bboxes, pred_kpts
     ):
         """
         Calculate the keypoints loss for the model.
