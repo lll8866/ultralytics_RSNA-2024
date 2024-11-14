@@ -9,6 +9,7 @@ from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
+from typing import Optional
 
 __all__ = (
     "DFL",
@@ -49,6 +50,8 @@ __all__ = (
     "Attention",
     "PSA",
     "SCDown",
+    "CA",
+    "CAA",
 )
 
 
@@ -1106,3 +1109,57 @@ class SCDown(nn.Module):
     def forward(self, x):
         """Applies convolution and downsampling to the input tensor in the SCDown module."""
         return self.cv2(self.cv1(x))
+
+class CA(nn.Module):
+    def __init__(self, c1, c2, reduction):
+        super(CA, self).__init__()
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+
+        mip = max(8, c1 // reduction)
+
+        self.conv1 = nn.Conv2d(c1, mip, kernel_size=1, stride=1, padding=0)
+        self.bn1 = nn.BatchNorm2d(mip)
+        self.act = nn.Hardswish()
+
+        self.conv_h = nn.Conv2d(mip, c2, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2d(mip, c2, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        identity = x
+
+        n, c, h, w = x.size()
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
+
+        x_h, x_w = torch.split(y, [h, w], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+
+        a_h = self.conv_h(x_h).sigmoid()
+        a_w = self.conv_w(x_w).sigmoid()
+
+        out = identity * a_w * a_h
+
+        return out
+
+
+class CAA(nn.Module):
+    def __init__(self, ch, h_kernel_size=11, v_kernel_size=11) -> None:
+        super().__init__()
+
+        self.avg_pool = nn.AvgPool2d(7, 1, 3)
+        self.conv1 = Conv(ch, ch)
+        self.h_conv = nn.Conv2d(ch, ch, (1, h_kernel_size), 1, (0, h_kernel_size // 2), 1, ch)
+        self.v_conv = nn.Conv2d(ch, ch, (v_kernel_size, 1), 1, (v_kernel_size // 2, 0), 1, ch)
+        self.conv2 = Conv(ch, ch)
+        self.act = nn.Sigmoid()
+
+    def forward(self, x):
+        attn_factor = self.act(self.conv2(self.v_conv(self.h_conv(self.conv1(self.avg_pool(x))))))
+        return attn_factor * x
+
