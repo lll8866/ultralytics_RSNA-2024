@@ -271,7 +271,9 @@ class v8DetectionLoss:
         # 计算总损失
         total_loss_cls = loss_bce.sum() + loss_ce.sum() * 4.2
         loss[1] = total_loss_cls / target_scores_sum
-
+        
+        print('target_scores_sum为：',target_scores_sum)
+        print('目标分数形状为：',target_scores.shape)
         # # plan2
         #
         # # 创建一个掩码，用于标记目标张量中类别维度全为0的位置
