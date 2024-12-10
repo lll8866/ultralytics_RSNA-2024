@@ -269,7 +269,7 @@ class v8DetectionLoss:
         loss_ce = cross_entropy_loss_function(pred_scores_ce.view(-1,pred_scores.shape[2]), target_scores_ce.view(-1,pred_scores.shape[2]))
 
         # 计算总损失
-        total_loss_cls = loss_bce.sum() + loss_ce.sum()
+        total_loss_cls = loss_bce.sum() + loss_ce.sum() * pred_scores.shape[2]
         loss[1] = total_loss_cls / target_scores_sum
 
         # # plan2
