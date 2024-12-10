@@ -246,57 +246,56 @@ class v8DetectionLoss:
         # loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
 
         # plan1
-        #         total_loss_cls = torch.zeros(pred_scores.shape[2]).to('cuda')
-        #         weight_temp = []
-        #         for i in range(int(pred_scores.shape[2]/3)):
-        #             weight_temp.extend([1.0, 2.0, 4.0])
-        #         weights = torch.tensor(weight_temp)
-        #         cross_entropy_loss_function = nn.CrossEntropyLoss(weight=weights.to('cuda'),reduction='none')
-        #         # 创建一个掩码，用于标记目标张量中类别维度全为0的位置
-        #         mask_zero = torch.all(target_scores == 0, dim=-1)
-
-        #         # 将掩码扩展到与pred_scores和target_scores相同的维度，以便进行后续操作
-        #         mask_zero_expanded = mask_zero.unsqueeze(-1).expand_as(pred_scores)
-
-        #         # 根据掩码分离出需要使用BCELoss和CrossEntropyLoss的部分
-        #         pred_scores_bce = pred_scores*mask_zero_expanded
-        #         target_scores_bce = target_scores*mask_zero_expanded.to(dtype)
-
-        #         pred_scores_ce = pred_scores*(~mask_zero_expanded)
-        #         target_scores_ce = target_scores*(~mask_zero_expanded).to(dtype)
-
-        #         # 分别计算两种损失
-        #         loss_bce = self.bce(pred_scores_bce, target_scores_bce)
-        #         loss_ce = cross_entropy_loss_function(pred_scores_ce.view(-1,pred_scores.shape[2]), target_scores_ce.view(-1,pred_scores.shape[2]))
-
-        #         # 计算总损失
-        #         total_loss_cls = loss_bce.sum() + loss_ce.sum()
-        #         loss[1] = total_loss_cls / target_scores_sum
-
-        # plan2
-
+        weight_temp = []
+        for i in range(int(pred_scores.shape[2] / 3)):
+            weight_temp.extend([1.0, 1.25, 2.5])
+        weights = torch.tensor(weight_temp)
+        cross_entropy_loss_function = nn.CrossEntropyLoss(weight=weights.to('cuda'),reduction='none')
         # 创建一个掩码，用于标记目标张量中类别维度全为0的位置
         mask_zero = torch.all(target_scores == 0, dim=-1)
 
         # 将掩码扩展到与pred_scores和target_scores相同的维度，以便进行后续操作
         mask_zero_expanded = mask_zero.unsqueeze(-1).expand_as(pred_scores)
 
-        weight_temp = []
-        for i in range(int(pred_scores.shape[2] / 3)):
-            weight_temp.extend([1.0, 1.25, 2.5])
-        weights = torch.tensor(weight_temp)
-        # 创建形状为 (1, len(weights)) 的基础张量
-        base_tensor = torch.tensor(weights).unsqueeze(0)
+        # 根据掩码分离出需要使用BCELoss和CrossEntropyLoss的部分
+        pred_scores_bce = pred_scores*mask_zero_expanded
+        target_scores_bce = target_scores*mask_zero_expanded.to(dtype)
 
-        # 通过tile函数在0维度上重复，得到形状为 (pred_scores.shape[0] * pred_scores.shape[1], len(weights)) 的张量
-        repeated_tensor = base_tensor.tile((pred_scores.shape[0] * pred_scores.shape[1], 1))
+        pred_scores_ce = pred_scores*(~mask_zero_expanded)
+        target_scores_ce = target_scores*(~mask_zero_expanded).to(dtype)
 
-        # 调整形状为 (pred_scores.shape[0], pred_scores.shape[1], len(weights))
-        weights = repeated_tensor.view(pred_scores.shape[0], pred_scores.shape[1], len(weights))
-        weights[mask_zero_expanded] = 1.0
-        bce_loss_func = nn.BCEWithLogitsLoss(weight=weights.to('cuda'), reduction='none')
+        # 分别计算两种损失
+        loss_bce = self.bce(pred_scores_bce, target_scores_bce)
+        loss_ce = cross_entropy_loss_function(pred_scores_ce.view(-1,pred_scores.shape[2]), target_scores_ce.view(-1,pred_scores.shape[2]))
 
-        loss[1] = bce_loss_func(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum
+        # 计算总损失
+        total_loss_cls = loss_bce.sum() + loss_ce.sum()
+        loss[1] = total_loss_cls / target_scores_sum
+
+        # # plan2
+        #
+        # # 创建一个掩码，用于标记目标张量中类别维度全为0的位置
+        # mask_zero = torch.all(target_scores == 0, dim=-1)
+        #
+        # # 将掩码扩展到与pred_scores和target_scores相同的维度，以便进行后续操作
+        # mask_zero_expanded = mask_zero.unsqueeze(-1).expand_as(pred_scores)
+        #
+        # weight_temp = []
+        # for i in range(int(pred_scores.shape[2] / 3)):
+        #     weight_temp.extend([1.0, 1.25, 2.5])
+        # weights = torch.tensor(weight_temp)
+        # # 创建形状为 (1, len(weights)) 的基础张量
+        # base_tensor = torch.tensor(weights).unsqueeze(0)
+        #
+        # # 通过tile函数在0维度上重复，得到形状为 (pred_scores.shape[0] * pred_scores.shape[1], len(weights)) 的张量
+        # repeated_tensor = base_tensor.tile((pred_scores.shape[0] * pred_scores.shape[1], 1))
+        #
+        # # 调整形状为 (pred_scores.shape[0], pred_scores.shape[1], len(weights))
+        # weights = repeated_tensor.view(pred_scores.shape[0], pred_scores.shape[1], len(weights))
+        # weights[mask_zero_expanded] = 1.0
+        # bce_loss_func = nn.BCEWithLogitsLoss(weight=weights.to('cuda'), reduction='none')
+        #
+        # loss[1] = bce_loss_func(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum
 
         # Bbox loss
         if fg_mask.sum():
